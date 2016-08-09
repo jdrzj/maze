@@ -26,18 +26,38 @@ class Player
   end
 
   def figure
-    "o"
+    return "o"
   end
 
   def move direction, value
     @game.level[pos_x][pos_y] = " "
     @steps+=value.abs
-    @game.log << "p moves #{direction} #{value}"
+    @game.log << "#{Time.now.strftime "%H:%M:%S"} p moves #{direction} #{value}"
     case direction
-    when :x then self.pos_x += value
-    when :y then self.pos_y += value
+      when :x then @pos_x += value
+      when :y then @pos_y += value
     end
     @game.level[pos_x][pos_y] = self.figure
+  end
+
+  def behaviour_on_direction direction, value
+    next_pos = {x: self.pos_x, y:self.pos_y}
+    if direction == :x
+      next_pos[:x] += value
+    elsif direction == :y
+      next_pos[:y] += value
+    end
+    if @level[next_pos[:x]][next_pos[:y]] == " "
+      @player.move :x, -1
+    elsif @level[next_pos[:x]][next_pos[:y]] == @@chest
+      @level[@player.pos_x-1][@player.pos_y] = @@open_chest
+      @player.add_to_inventory item_from_chest
+    elsif @level[next_pos[:x]][next_pos[:y]] == @@next_level
+      #TODO: should be next level
+      exit 0
+    elsif @level[next_pos[:x]][next_pos[:y]] == @@creature
+      self.log << "Player hits creature, dmg: #{@player.dmg}"
+    end
   end
 end
 
@@ -52,26 +72,23 @@ class Creature
     @pos_y = pos_y
   end
 
-  def move_towards_player
-    #TODO move to player
-    @game.level[pos_x][pos_y] = " "
+  def do_action
+    old_pos_x = @pos_x
+    old_pos_y = @pos_y
     vec = {
       x: @game.player.pos_x - @pos_x,
-      y: @game.player.pos_y - @pos_y,
+      y: @game.player.pos_y - @pos_y
     }
-    if (vec[:x] == 0 && vec[:y] == 1) || (vec[:y] == 0 && vec[:x] == 1)
-      @game.log << "Creature hits player, dmg: #{dmg}"
-    elsif vec[:x].abs < vec[:y].abs
-      v = (vec[:y] > 0 ? 1 : -1)
-      if @game.level[@pos_x][@pos_y+v] == " "
-        self.move :y, v
-      end
-    elsif vec[:x].abs > vec[:y].abs
+    #hit if in next to player
+    if (vec[:x] == 0 && vec[:y].abs == 1) || (vec[:y] == 0 && vec[:x].abs == 1)
+      @game.log << "#{Time.now.strftime "%H:%M:%S"} Creature hits player, dmg: #{dmg}"
+    elsif vec[:x].abs > 0 && vec[:y]==0
       v = (vec[:x] > 0 ? 1 : -1)
-      if @game.level[@pos_x+v][@pos_y] == " "
-        self.move :x, v
-      end
-    elsif vec[:x].abs == vec[:y].abs
+      self.move :x, v
+    elsif vec[:y].abs > 0 && vec[:x]==0
+      v = (vec[:y] > 0 ? 1 : -1)
+      self.move :y, v
+    else
       if Random.rand > 0.5
         v = (vec[:y] > 0 ? 1 : -1)
         if @game.level[@pos_x][@pos_y+v] == " "
@@ -84,19 +101,25 @@ class Creature
         end
       end
     end
+    @game.level[old_pos_x][old_pos_y] = " "
     @game.level[@pos_x][@pos_y] = "m"
   end
 
   def move direction, value
-    @game.log << "c moves #{direction} #{value}"
+    @game.level[pos_x][pos_y] = " "
     case direction
-    when :x then @pos_x += value
-    when :y then @pos_y += value
+    when :x then
+      return if @game.level[pos_x+value][pos_y] != " "
+      @pos_x += value
+    when :y then
+      return if @game.level[pos_x][pos_y+value] != " "
+      @pos_y += value
     end
+    @game.log << "#{Time.now.strftime "%H:%M:%S"} c moves #{direction} #{value}"
   end
 
   def figure
-    "m"
+    return "m"
   end
 end
 
@@ -120,13 +143,15 @@ class Game
   end
 
   def refresh_screens
+    line = 0
     @info_window.clear
     @info_window.box("|", "-", "x")
-    line = 0
     @info_window.setpos((line+=1), 1)
     @info_window.addstr("pos: {x: #{@player.pos_x}, y: #{@player.pos_y}}")
     @info_window.setpos((line+=1), 1)
-    @info_window.addstr("dmg: #{@player.dmg}, hp: #{@player.hp}")
+    @info_window.addstr("player:")
+    @info_window.setpos((line+=1), 1)
+    @info_window.addstr("dmg: #{@player.dmg}, hp: #{@player.hp}, pos_x: #{@player.pos_x}, pos_y: #{@player.pos_y}")
     @info_window.setpos((line+=1), 1)
     @info_window.addstr("inventory:")
     @player.inventory.each do |item, count|
@@ -153,7 +178,7 @@ class Game
     Curses.stdscr.keypad = true
     Curses.curs_set(0)  # Invisible cursor
     # Curses.timeout = 1
-    @info_window = Curses::Window.new(20, 40, 0, 0)
+    @info_window = Curses::Window.new(30, 40, 0, 0)
     @player_window = Curses::Window.new(@level.count+1, @level[0].count+1, 30, 0)
     refresh_screens
     loop do
@@ -232,7 +257,7 @@ class Game
       end
       #creatures moves
       creatures.each do |creature|
-        creature.move_towards_player
+        creature.do_action
         @player_window.setpos(creature.pos_x, creature.pos_y)
         @player_window << creature.figure
         refresh_screens
