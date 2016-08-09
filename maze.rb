@@ -1,16 +1,16 @@
 require 'curses'
 
 class Player
-  attr_accessor :inventory, :pos_x, :pos_y, :hp, :dmg
+  attr_accessor :inventory, :pos_x, :pos_y, :hp, :dmg, :game
 
-
-  def initialize
+  def initialize game
     @steps = 0
     @inventory = Hash.new
     @pos_x = 0
     @pos_y = 0
     @hp = 10
     @dmg = 1
+    @game = game
   end
 
   def damage
@@ -26,15 +26,18 @@ class Player
   end
 
   def figure
-    @steps.odd? ? "o" : "a"
+    "o"
   end
 
   def move direction, value
+    @game.level[pos_x][pos_y] = " "
     @steps+=value.abs
+    @game.log << "p moves #{direction} #{value}"
     case direction
     when :x then self.pos_x += value
     when :y then self.pos_y += value
     end
+    @game.level[pos_x][pos_y] = self.figure
   end
 end
 
@@ -53,41 +56,42 @@ class Creature
     #TODO move to player
     @game.level[pos_x][pos_y] = " "
     vec = {
-      x: @game.player.pos_x - pos_x,
-      y: @game.player.pos_y - pos_y,
+      x: @game.player.pos_x - @pos_x,
+      y: @game.player.pos_y - @pos_y,
     }
     if (vec[:x] == 0 && vec[:y] == 1) || (vec[:y] == 0 && vec[:x] == 1)
-      puts "HIT"
+      @game.log << "Creature hits player, dmg: #{dmg}"
     elsif vec[:x].abs < vec[:y].abs
       v = (vec[:y] > 0 ? 1 : -1)
-      if @game.level[pos_x][pos_y+v] == " "
+      if @game.level[@pos_x][@pos_y+v] == " "
         self.move :y, v
       end
     elsif vec[:x].abs > vec[:y].abs
       v = (vec[:x] > 0 ? 1 : -1)
-      if @game.level[pos_x+v][pos_y] == " "
+      if @game.level[@pos_x+v][@pos_y] == " "
         self.move :x, v
       end
     elsif vec[:x].abs == vec[:y].abs
       if Random.rand > 0.5
         v = (vec[:y] > 0 ? 1 : -1)
-        if @game.level[pos_x][pos_y+v] == " "
+        if @game.level[@pos_x][@pos_y+v] == " "
           self.move :y, v
         end
       else
         v = (vec[:x] > 0 ? 1 : -1)
-        if @game.level[pos_x+v][pos_y] == " "
+        if @game.level[@pos_x+v][@pos_y] == " "
           self.move :x, v
         end
       end
     end
-    @game.level[pos_x][pos_y] = "m"
+    @game.level[@pos_x][@pos_y] = "m"
   end
 
   def move direction, value
+    @game.log << "c moves #{direction} #{value}"
     case direction
-    when :x then self.pos_x += value
-    when :y then self.pos_y += value
+    when :x then @pos_x += value
+    when :y then @pos_y += value
     end
   end
 
@@ -97,23 +101,26 @@ class Creature
 end
 
 class Game
-  attr_accessor :level, :player, :creatures, :info_window, :player_window
+  attr_accessor :level, :player, :creatures, :info_window, :player_window, :log
 
   @@chest = "c"
   @@open_chest = "^"
   @@next_level = "N"
   @@start_position = "W"
+  @@creature = "m"
 
   def initialize
     @level = self.class.read_maze_from_file "levels/1.lvl"
-    @player = Player.new
+    @player = Player.new self
     pos = self.class.find_val_in_arr @level, @@start_position
     @player.pos_x = pos[:x]
     @player.pos_y = pos[:y]
-    @creatures = self.find_monsters_in_level @level, "m"
+    @creatures = self.find_monsters_in_level @level, @@creature
+    @log = []
   end
 
   def refresh_screens
+    @info_window.clear
     @info_window.box("|", "-", "x")
     line = 0
     @info_window.setpos((line+=1), 1)
@@ -131,6 +138,10 @@ class Game
     @creatures.each do |creature|
       @info_window.setpos((line+=1), 1)
       @info_window.addstr("dmg: #{creature.dmg}, hp: #{creature.hp}, pos_x: #{creature.pos_x}, pos_y: #{creature.pos_y}")
+    end
+    @log.last(10).each do |l|
+      @info_window.setpos((line+=1), 1)
+      @info_window.addstr("##{l}")
     end
     @info_window.refresh
     @player_window.refresh
@@ -177,7 +188,10 @@ class Game
           @level[@player.pos_x-1][@player.pos_y] = @@open_chest
           @player.add_to_inventory item_from_chest
         elsif @level[@player.pos_x-1][@player.pos_y] == @@next_level
+          #TODO: should be next level
           exit 0
+        elsif @level[@player.pos_x-1][@player.pos_y] == @@creature
+          self.log << "Player hits creature, dmg: #{@player.dmg}"
         end
       when Curses::KEY_DOWN
         if @level[@player.pos_x+1][@player.pos_y] == " "
@@ -186,7 +200,10 @@ class Game
           @level[@player.pos_x+1][@player.pos_y] = @@open_chest
           @player.add_to_inventory item_from_chest
         elsif @level[@player.pos_x+1][@player.pos_y] == @@next_level
+          #TODO: should be next level
           exit 0
+        elsif @level[@player.pos_x+1][@player.pos_y] == @@creature
+          self.log << "Player hits creature, dmg: #{@player.dmg}"
         end
       when Curses::KEY_LEFT
         if @level[@player.pos_x][@player.pos_y-1] == " "
@@ -195,7 +212,10 @@ class Game
           @level[@player.pos_x][@player.pos_y-1] = @@open_chest
           @player.add_to_inventory item_from_chest
         elsif @level[@player.pos_x][@player.pos_y-1] == @@next_level
+          #TODO: should be next level
           exit 0
+        elsif @level[@player.pos_x][@player.pos_y-1] == @@creature
+          self.log << "Player hits creature, dmg: #{@player.dmg}"
         end
       when Curses::KEY_RIGHT
         if @level[@player.pos_x][@player.pos_y+1] == " "
@@ -204,7 +224,10 @@ class Game
           @level[@player.pos_x][@player.pos_y+1] = @@open_chest
           @player.add_to_inventory item_from_chest
         elsif @level[@player.pos_x][@player.pos_y+1] == @@next_level
+          #TODO: should be next level
           exit 0
+        elsif @level[@player.pos_x][@player.pos_y+1] == @@creature
+          self.log << "Player hits creature, dmg: #{@player.dmg}"
         end
       end
       #creatures moves
