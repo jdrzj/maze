@@ -8,13 +8,9 @@ class Player
     @inventory = Hash.new
     @pos_x = 0
     @pos_y = 0
-    @hp = 10
-    @dmg = 1
+    @hp = 100
+    @dmg = 3
     @game = game
-  end
-
-  def damage
-    return 2
   end
 
   def add_to_inventory item
@@ -26,7 +22,7 @@ class Player
   end
 
   def figure
-    return "o"
+    return "@"
   end
 
   def move direction, value
@@ -40,29 +36,69 @@ class Player
     @game.level[pos_x][pos_y] = self.figure
   end
 
+  def receive_damage dmg
+    self.hp -= dmg
+    if hp <= 0
+      self.is_dead = true
+    end
+  end
+
+  def hit c, dmg
+    c.receive_damage dmg
+    @game.log << "Player hits creature, dmg: #{self.dmg}"
+  end
+
   def behaviour_on_direction direction, value
-    next_pos = {x: self.pos_x, y:self.pos_y}
+    next_pos = {x: self.pos_x, y: self.pos_y}
     if direction == :x
       next_pos[:x] += value
     elsif direction == :y
       next_pos[:y] += value
     end
-    if @level[next_pos[:x]][next_pos[:y]] == " "
-      @player.move :x, -1
-    elsif @level[next_pos[:x]][next_pos[:y]] == @@chest
-      @level[@player.pos_x-1][@player.pos_y] = @@open_chest
-      @player.add_to_inventory item_from_chest
-    elsif @level[next_pos[:x]][next_pos[:y]] == @@next_level
+
+    @game.log << "next is: #{@game.level[next_pos[:x]][next_pos[:y]]}"
+    if @game.class.areas_player_able_to_walk.include? @game.level[next_pos[:x]][next_pos[:y]]
+      @game.log << @game.class.areas_player_able_to_walk
+      self.move direction, value
+    elsif @game.level[next_pos[:x]][next_pos[:y]] == Chest::close_chest_figure
+      @game.level[next_pos[:x]][next_pos[:y]] = Chest::open_chest_figure
+      self.add_to_inventory self.game.item_from_chest(next_pos[:x], next_pos[:y])
+    elsif @game.level[next_pos[:x]][next_pos[:y]] == @game.class.next_level
       #TODO: should be next level
       exit 0
-    elsif @level[next_pos[:x]][next_pos[:y]] == @@creature
-      self.log << "Player hits creature, dmg: #{@player.dmg}"
+    elsif @game.level[next_pos[:x]][next_pos[:y]] == Creature::normal_figure
+      c = @game.find_creature_by_position next_pos[:x], next_pos[:y]
+      self.hit c, self.dmg
     end
   end
 end
 
+class Chest
+  attr_accessor :item, :is_open, :pos_x, :pos_y
+
+  def initialize item, pos_x, pos_y
+    self.item = item
+    self.is_open = false
+    self.pos_x = pos_x
+    self.pos_y = pos_y
+  end
+
+  def figure
+    is_open ? self.class.close_chest_figure : self.class.open_chest_figure
+  end
+
+  def self.open_chest_figure
+    "]"
+  end
+
+  def self.close_chest_figure
+    "c"
+  end
+
+end
+
 class Creature
-  attr_accessor :dmg, :hp, :pos_x, :pos_y
+  attr_accessor :dmg, :hp, :pos_x, :pos_y, :is_dead
 
   def initialize game, pos_x, pos_y
     @dmg = 3
@@ -70,18 +106,36 @@ class Creature
     @game = game
     @pos_x = pos_x
     @pos_y = pos_y
+    @is_dead = false
+  end
+
+  def receive_damage dmg
+    self.hp -= dmg
+    if hp <= 0
+      self.is_dead = true
+      @game.level[pos_x][pos_y] = self.figure
+    end
+  end
+
+  def hit_player
+    @game.player.receive_dmg self.dmg
+    @game.log << "Creature hits player, dmg: #{self.dmg}"
   end
 
   def do_action
+    return if is_dead || (hp <= 0)
     old_pos_x = @pos_x
     old_pos_y = @pos_y
     vec = {
       x: @game.player.pos_x - @pos_x,
       y: @game.player.pos_y - @pos_y
     }
+
     #hit if in next to player
     if (vec[:x] == 0 && vec[:y].abs == 1) || (vec[:y] == 0 && vec[:x].abs == 1)
       @game.log << "#{Time.now.strftime "%H:%M:%S"} Creature hits player, dmg: #{dmg}"
+      #TODO: THIS IS SO UGLY!!!
+      self.hit_player
     elsif vec[:x].abs > 0 && vec[:y]==0
       v = (vec[:x] > 0 ? 1 : -1)
       self.move :x, v
@@ -119,18 +173,30 @@ class Creature
   end
 
   def figure
+    if hp <= 0
+      return self.class.dead_creature_figure
+    else
+      return self.class.normal_figure
+    end
+  end
+
+  def self.dead_creature_figure
+    return ","
+  end
+
+  def self.normal_figure
     return "m"
   end
 end
 
 class Game
-  attr_accessor :level, :player, :creatures, :info_window, :player_window, :log
+  attr_accessor :level, :player, :creatures, :chests, :info_window, :player_window, :log
 
   @@chest = "c"
   @@open_chest = "^"
   @@next_level = "N"
   @@start_position = "W"
-  @@creature = "m"
+  @@creature = Creature::normal_figure
 
   def initialize
     @level = self.class.read_maze_from_file "levels/1.lvl"
@@ -138,14 +204,16 @@ class Game
     pos = self.class.find_val_in_arr @level, @@start_position
     @player.pos_x = pos[:x]
     @player.pos_y = pos[:y]
-    @creatures = self.find_monsters_in_level @level, @@creature
+    @creatures = self.find_creatures_in_level @level, @@creature
+    @chests = self.find_chests_in_level @level
     @log = []
   end
 
   def refresh_screens
     line = 0
     @info_window.clear
-    @info_window.box("|", "-", "x")
+    @player_window.clear
+    @info_window.box("|", "-", "#")
     @info_window.setpos((line+=1), 1)
     @info_window.addstr("pos: {x: #{@player.pos_x}, y: #{@player.pos_y}}")
     @info_window.setpos((line+=1), 1)
@@ -169,105 +237,69 @@ class Game
       @info_window.addstr("##{l}")
     end
     @info_window.refresh
+
+    #LEVEL
+    x = 0
+    y = 0
+    @level.each do |l|
+      l.each do |p|
+        @player_window.setpos(x,y)
+        @player_window << p
+        y+=1
+      end
+      y=0
+      x+=1
+    end
+
+
+    #CREATURES
+    creatures.each do |creature|
+      @player_window.setpos(creature.pos_x, creature.pos_y)
+      @player_window << creature.figure
+    end
+
+    #PLAYER
+    @player_window.setpos(@player.pos_x, @player.pos_y)
+    @player_window << @player.figure
+
     @player_window.refresh
   end
 
   def run
     Curses.init_screen
-    # Curses.noecho
+    Curses.noecho
     Curses.stdscr.keypad = true
     Curses.curs_set(0)  # Invisible cursor
     # Curses.timeout = 1
-    @info_window = Curses::Window.new(30, 40, 0, 0)
-    @player_window = Curses::Window.new(@level.count+1, @level[0].count+1, 30, 0)
-    refresh_screens
-    loop do
-      x = 0
-      y = 0
-      @level.each do |line|
-        line.each do |p|
-          @player_window.setpos(x,y)
-          @player_window << p
-          y+=1
-        end
-        y=0
-        x+=1
-      end
-      @player_window.setpos(@player.pos_x, @player.pos_y)
-      @player_window << @player.figure
-      refresh_screens
 
-      creatures.each do |creature|
-        @player_window.setpos(creature.pos_x, creature.pos_y)
-        @player_window << creature.figure
-        refresh_screens
-      end
+    @info_window = Curses::Window.new(30, 40, @level.count+1, 0)
+    @player_window = Curses::Window.new(@level.count+1, @level[0].count+1, 0, 0)
+
+    loop do
+      refresh_screens
       input = Curses.getch
-      @player_window.addch ?\n
+      # @player_window.addch ?\n
       #player moves
       case input
       when Curses::KEY_UP
-        if @level[@player.pos_x-1][@player.pos_y] == " "
-          @player.move :x, -1
-        elsif @level[@player.pos_x-1][@player.pos_y] == @@chest
-          @level[@player.pos_x-1][@player.pos_y] = @@open_chest
-          @player.add_to_inventory item_from_chest
-        elsif @level[@player.pos_x-1][@player.pos_y] == @@next_level
-          #TODO: should be next level
-          exit 0
-        elsif @level[@player.pos_x-1][@player.pos_y] == @@creature
-          self.log << "Player hits creature, dmg: #{@player.dmg}"
-        end
+        @player.behaviour_on_direction :x, -1
       when Curses::KEY_DOWN
-        if @level[@player.pos_x+1][@player.pos_y] == " "
-          @player.move :x, +1
-        elsif @level[@player.pos_x+1][@player.pos_y] == @@chest
-          @level[@player.pos_x+1][@player.pos_y] = @@open_chest
-          @player.add_to_inventory item_from_chest
-        elsif @level[@player.pos_x+1][@player.pos_y] == @@next_level
-          #TODO: should be next level
-          exit 0
-        elsif @level[@player.pos_x+1][@player.pos_y] == @@creature
-          self.log << "Player hits creature, dmg: #{@player.dmg}"
-        end
+        @player.behaviour_on_direction :x,  1
       when Curses::KEY_LEFT
-        if @level[@player.pos_x][@player.pos_y-1] == " "
-          @player.move :y, -1
-        elsif @level[@player.pos_x][@player.pos_y-1] == @@chest
-          @level[@player.pos_x][@player.pos_y-1] = @@open_chest
-          @player.add_to_inventory item_from_chest
-        elsif @level[@player.pos_x][@player.pos_y-1] == @@next_level
-          #TODO: should be next level
-          exit 0
-        elsif @level[@player.pos_x][@player.pos_y-1] == @@creature
-          self.log << "Player hits creature, dmg: #{@player.dmg}"
-        end
+        @player.behaviour_on_direction :y, -1
       when Curses::KEY_RIGHT
-        if @level[@player.pos_x][@player.pos_y+1] == " "
-          @player.move :y, +1
-        elsif @level[@player.pos_x][@player.pos_y+1] == @@chest
-          @level[@player.pos_x][@player.pos_y+1] = @@open_chest
-          @player.add_to_inventory item_from_chest
-        elsif @level[@player.pos_x][@player.pos_y+1] == @@next_level
-          #TODO: should be next level
-          exit 0
-        elsif @level[@player.pos_x][@player.pos_y+1] == @@creature
-          self.log << "Player hits creature, dmg: #{@player.dmg}"
-        end
+        @player.behaviour_on_direction :y,  1
       end
       #creatures moves
       creatures.each do |creature|
         creature.do_action
-        @player_window.setpos(creature.pos_x, creature.pos_y)
-        @player_window << creature.figure
-        refresh_screens
       end
     end
     @player_window.close
     @info_window.close
   end
 
-  def item_from_chest
+  def item_from_chest pos_x, pos_y
     #TODO: figure something out
     return "sword"
   end
@@ -280,9 +312,9 @@ class Game
     end
   end
 
-  def find_monsters_in_level level, monster_letter
+  def find_creatures_in_level level, monster_letter
     arr = []
-    level.each_with_index do |line, x|
+    self.level.each_with_index do |line, x|
       line.each_with_index do |el, y|
         if el == monster_letter
           arr << Creature.new(self, x, y)
@@ -303,6 +335,41 @@ class Game
     arr
   end
 
+  def find_creature_by_position pos_x, pos_y
+    @creatures.each do |creature|
+      return creature if creature.pos_x == pos_x && creature.pos_y == pos_y
+    end
+  end
+
+  def find_chest_by_position pos_x, pos_y
+    @chests.each do |chest|
+      return chest if chest.pos_x == pos_x && chest.pos_y == pos_y
+    end
+  end
+
+  def find_chests_in_level level
+    arr = []
+    level.each_with_index do |line, x|
+      line.each_with_index do |el, y|
+        if el == @@chest
+          arr << Chest.new("sword", x, y)
+        end
+      end
+    end
+    arr
+  end
+
+  def self.next_level
+    return @@next_level
+  end
+
+  def self.start_position
+    return @@start_position
+  end
+
+  def self.areas_player_able_to_walk
+    return [Creature::dead_creature_figure, " "]
+  end
 end
 
 g = Game.new
