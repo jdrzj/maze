@@ -118,7 +118,7 @@ class Creature
   end
 
   def hit_player
-    @game.player.receive_dmg self.dmg
+    @game.player.receive_damage self.dmg
     @game.log << "Creature hits player, dmg: #{self.dmg}"
   end
 
@@ -244,7 +244,8 @@ class Game
     @level.each do |l|
       l.each do |p|
         @player_window.setpos(x,y)
-        @player_window << p
+        el = Game::replace_places p
+        @player_window << el
         y+=1
       end
       y=0
@@ -370,6 +371,19 @@ class Game
   def self.areas_player_able_to_walk
     return [Creature::dead_creature_figure, " "]
   end
+
+  def self.doors
+    "D"
+  end
+
+  def self.replace_places place
+    if ["1", "2", "3", "4", "5", "6", "7", "8", "9"].include? place
+      return self.doors
+    else
+      return place
+    end
+  end
+
 end
 
 g = Game.new
