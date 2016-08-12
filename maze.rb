@@ -1,7 +1,7 @@
 require 'curses'
 
 class Player
-  attr_accessor :inventory, :pos_x, :pos_y, :hp, :dmg, :game
+  attr_accessor :inventory, :pos_x, :pos_y, :hp, :dmg, :game, :is_dead
 
   def initialize game
     @steps = 0
@@ -26,14 +26,13 @@ class Player
   end
 
   def move direction, value
-    @game.level[pos_x][pos_y] = " "
+    return if hp <= 0
     @steps+=value.abs
     @game.log << "#{Time.now.strftime "%H:%M:%S"} p moves #{direction} #{value}"
     case direction
       when :x then @pos_x += value
       when :y then @pos_y += value
     end
-    @game.level[pos_x][pos_y] = self.figure
   end
 
   def receive_damage dmg
@@ -56,19 +55,19 @@ class Player
       next_pos[:y] += value
     end
 
-    @game.log << "next is: #{@game.level[next_pos[:x]][next_pos[:y]]}"
+    @game.log << @game.class.levels
+    @game.log << @game.level[next_pos[:x]][next_pos[:y]]
     if @game.class.areas_player_able_to_walk.include? @game.level[next_pos[:x]][next_pos[:y]]
       @game.log << @game.class.areas_player_able_to_walk
       self.move direction, value
     elsif @game.level[next_pos[:x]][next_pos[:y]] == Chest::close_chest_figure
       @game.level[next_pos[:x]][next_pos[:y]] = Chest::open_chest_figure
       self.add_to_inventory self.game.item_from_chest(next_pos[:x], next_pos[:y])
-    elsif @game.level[next_pos[:x]][next_pos[:y]] == @game.class.next_level
-      #TODO: should be next level
-      exit 0
     elsif @game.level[next_pos[:x]][next_pos[:y]] == Creature::normal_figure
       c = @game.find_creature_by_position next_pos[:x], next_pos[:y]
       self.hit c, self.dmg
+    elsif @game.class.levels.include? @game.level[next_pos[:x]][next_pos[:y]]
+      @game.change_level @game.level[next_pos[:x]][next_pos[:y]]
     end
   end
 end
@@ -113,7 +112,6 @@ class Creature
     self.hp -= dmg
     if hp <= 0
       self.is_dead = true
-      @game.level[pos_x][pos_y] = self.figure
     end
   end
 
@@ -156,11 +154,9 @@ class Creature
       end
     end
     @game.level[old_pos_x][old_pos_y] = " "
-    @game.level[@pos_x][@pos_y] = "m"
   end
 
   def move direction, value
-    @game.level[pos_x][pos_y] = " "
     case direction
     when :x then
       return if @game.level[pos_x+value][pos_y] != " "
@@ -190,23 +186,39 @@ class Creature
 end
 
 class Game
-  attr_accessor :level, :player, :creatures, :chests, :info_window, :player_window, :log
-
-  @@chest = "c"
-  @@open_chest = "^"
-  @@next_level = "N"
-  @@start_position = "W"
-  @@creature = Creature::normal_figure
+  attr_accessor :level, :current_level, :player, :creatures, :chests, :info_window, :player_window, :log
 
   def initialize
     @level = self.class.read_maze_from_file "levels/1.lvl"
+    @current_level = "1"
     @player = Player.new self
-    pos = self.class.find_val_in_arr @level, @@start_position
+    pos = self.class.find_val_in_arr @level, @current_level
     @player.pos_x = pos[:x]
     @player.pos_y = pos[:y]
-    @creatures = self.find_creatures_in_level @level, @@creature
+    @creatures = self.find_creatures_in_level @level, Creature::normal_figure
     @chests = self.find_chests_in_level @level
     @log = []
+  end
+
+
+  def self.levels
+    Dir.entries("levels/").map{|e| e.split(".").first}.compact
+  end
+
+  def change_level level
+    level_file_name = "levels/#{level}.lvl"
+    @current_level = level.to_s
+    @level = self.class.read_maze_from_file level_file_name
+    pos = self.class.find_val_in_arr @level, @current_level
+    @player.pos_x = pos[:x]
+    @player.pos_y = pos[:y]
+    @creatures = self.find_creatures_in_level @level, Creature::normal_figure
+    @chests = self.find_chests_in_level @level
+    Curses.clear
+    @info_window = Curses::Window.new(30, 40, @level.count+1, 0)
+    @player_window = Curses::Window.new(@level.count+1, @level[0].count+1, 0, 0)
+
+    @log << "New level"
   end
 
   def refresh_screens
@@ -277,6 +289,7 @@ class Game
     @player_window = Curses::Window.new(@level.count+1, @level[0].count+1, 0, 0)
 
     loop do
+      exit 0 if @player.is_dead
       refresh_screens
       input = Curses.getch
       # @player_window.addch ?\n
@@ -319,7 +332,6 @@ class Game
       line.each_with_index do |el, y|
         if el == monster_letter
           arr << Creature.new(self, x, y)
-          level[x][y] = 'm'
         end
       end
     end
@@ -352,20 +364,12 @@ class Game
     arr = []
     level.each_with_index do |line, x|
       line.each_with_index do |el, y|
-        if el == @@chest
+        if el == Chest::open_chest_figure
           arr << Chest.new("sword", x, y)
         end
       end
     end
     arr
-  end
-
-  def self.next_level
-    return @@next_level
-  end
-
-  def self.start_position
-    return @@start_position
   end
 
   def self.areas_player_able_to_walk
